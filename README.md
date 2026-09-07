@@ -32,6 +32,14 @@ A pre-inference n8n workflow that scans and masks cardholder data in the user pr
 
 **Workflow:** Webhook → Normalize Input → Scan and Mask → Forward to LLM API → Respond to Webhook
 
+```mermaid
+flowchart LR
+    A[Webhook] --> B[Normalize Input Fields\nuser_id · session_id · user_input]
+    B --> C[Scan and Mask PCI Data\nVisa · MC · Amex · Discover PANs\nCVV/CVC/CID · expiry dates]
+    C --> D[Forward to LLM API\nsanitized_input only]
+    D --> E[200 OK\nX-PCI-Scan · X-PCI-Redaction-Count\npci_scan audit object in body]
+```
+
 **Detects and masks:**
 - Primary Account Numbers (PANs): Visa, Mastercard, Amex, Discover — formatted and unformatted
 - CVV/CVC/CID security codes — detected by keyword context, not pattern alone
