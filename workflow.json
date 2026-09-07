@@ -1,0 +1,254 @@
+{
+  "name": "PCI-DSS v4.0: Cardholder Data Detector",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "pci-cardholder-scan",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "25a28fa7-2651-48a2-a016-f6a141dceb3e",
+      "name": "Receive User Prompt",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": ""
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "f1",
+              "name": "user_id",
+              "value": "={{ $json.body.user_id ?? 'anonymous' }}",
+              "type": "string"
+            },
+            {
+              "id": "f2",
+              "name": "session_id",
+              "value": "={{ $json.body.session_id ?? '' }}",
+              "type": "string"
+            },
+            {
+              "id": "f3",
+              "name": "user_input",
+              "value": "={{ $json.body.user_input ?? '' }}",
+              "type": "string"
+            },
+            {
+              "id": "f4",
+              "name": "scanned_at",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "7d4a7e52-0b7e-4ab0-9ed5-e65b9e2f4cbb",
+      "name": "Normalize Input Fields",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        224,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst results = [];\n\nfor (const item of items) {\n  const raw = item.json.user_input || '';\n  let sanitized = raw;\n  let redactions = 0;\n\n  const maskCard = () => { redactions++; return '[CARD-REDACTED]'; };\n\n  // Visa: 13-16 digits starting with 4, optional spaces or hyphens between groups\n  sanitized = sanitized.replace(/\\b4[0-9]{3}(?:[\\s\\-]?[0-9]{4}){2}[\\s\\-]?[0-9]{1,4}\\b/g, maskCard);\n\n  // Mastercard: 16 digits, 51-55 series and 2221-2720 (2-series) simplified to 22-27\n  sanitized = sanitized.replace(/\\b(?:5[1-5]|2[2-7])[0-9]{2}(?:[\\s\\-]?[0-9]{4}){3}\\b/g, maskCard);\n\n  // Amex: 15 digits starting with 34 or 37, formatted 4-6-5\n  sanitized = sanitized.replace(/\\b3[47][0-9]{2}[\\s\\-]?[0-9]{6}[\\s\\-]?[0-9]{5}\\b/g, maskCard);\n\n  // Discover: 16 digits starting with 6011 or 65xx\n  sanitized = sanitized.replace(/\\b6(?:011|5[0-9]{2})[\\s\\-]?(?:[0-9]{4}[\\s\\-]?){3}\\b/g, maskCard);\n\n  // CVV/CVC/CID: 3-4 digit security codes following a keyword\n  sanitized = sanitized.replace(/\\b(?:cvv2?|cvc2?|cid|security\\s+code)[:\\s]+([0-9]{3,4})\\b/gi, (m, digits) => {\n    redactions++;\n    return m.slice(0, m.length - digits.length) + '[CVV-REDACTED]';\n  });\n\n  // Card expiry dates: MM/YY or MM/YYYY\n  sanitized = sanitized.replace(/\\b(0[1-9]|1[0-2])\\/([0-9]{2}|[0-9]{4})\\b/g, () => { redactions++; return '[EXPIRY-REDACTED]'; });\n\n  results.push({\n    json: {\n      ...item.json,\n      sanitized_input: sanitized,\n      pci_scan: {\n        had_pci_data: redactions > 0,\n        redaction_count: redactions,\n        scan_status: redactions > 0 ? 'masked' : 'clean'\n      }\n    }\n  });\n}\n\nreturn results;",
+        "mode": "runOnceForAllItems"
+      },
+      "id": "98ba147a-cb83-4487-94c7-cf341e93f390",
+      "name": "Scan and Mask PCI Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "<__PLACEHOLDER_VALUE__your-llm-api-endpoint__>",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "<__PLACEHOLDER_VALUE__your-model-name__>"
+            },
+            {
+              "name": "messages",
+              "value": "={{ [{ \"role\": \"user\", \"content\": $json.sanitized_input }] }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "0376ea17-4104-410f-9bbc-9fce61de4091",
+      "name": "Forward to LLM API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        672,
+        0
+      ],
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "",
+          "name": "LLM API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"response\": $json.choices[0].message.content, \"pci_scan\": $(\"Scan and Mask PCI Data\").first().json.pci_scan } }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "X-PCI-Scan",
+                "value": "={{ $(\"Scan and Mask PCI Data\").first().json.pci_scan.scan_status }}"
+              },
+              {
+                "name": "X-PCI-Redaction-Count",
+                "value": "={{ String($(\"Scan and Mask PCI Data\").first().json.pci_scan.redaction_count) }}"
+              }
+            ]
+          }
+        }
+      },
+      "id": "89b3dd17-b807-4e4c-852b-714a2f9714b2",
+      "name": "Respond with LLM Output",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        896,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## PCI-DSS v4.0: Cardholder Data Detector\n\nPre-inference guardrail implementing PCI-DSS v4.0 Requirement 3. Scans and masks cardholder data in the user prompt before it reaches the LLM, then returns the sanitized response with audit headers.\n\n**Detects and masks:** Visa / Mastercard / Amex / Discover PANs (formatted and unformatted) · CVV/CVC/CID security codes · Card expiry dates (MM/YY and MM/YYYY)\n\n**Response includes:** `X-PCI-Scan: masked | clean` · `X-PCI-Redaction-Count: N` · full `pci_scan` object in body\n\n**Built by** [Neville Ko](https://www.linkedin.com/in/nevilleko/) · [GitHub](https://github.com/nenedesign)",
+        "height": 272,
+        "width": 1150,
+        "color": 2
+      },
+      "id": "cb43d675-bbf2-47a4-ac82-83b47a50002a",
+      "name": "Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -16,
+        -320
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Prerequisites\n\n1. An LLM API that accepts OpenAI-compatible `messages` format\n2. A Bearer token for that API: add it as the **LLM API Key** credential on the **Forward to LLM API** node\n\n**Test with:**\n```\nPOST /webhook-test/pci-cardholder-scan\n{\n  \"user_input\": \"my card is 4111 1111 1111 1111 cvv 123\",\n  \"user_id\": \"test-user\"\n}\n```\nExpected: `[CARD-REDACTED]` and `[CVV-REDACTED]` in `sanitized_input`",
+        "height": 280,
+        "width": 500,
+        "color": 4
+      },
+      "id": "4fcde385-9146-49a1-b071-d9ed58b53fc8",
+      "name": "Prerequisites",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        176
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Configuration\n\nTwo placeholders to replace in the **Forward to LLM API** node:\n\n- **URL**: your LLM API endpoint\n  e.g. `https://api.openai.com/v1/chat/completions`\n- **Model**: your model name\n  e.g. `gpt-4o` or `claude-opus-4-5-20251101`\n\nThe **Respond with LLM Output** node reads `$json.choices[0].message.content`. Update this path if your LLM returns a different response structure.",
+        "height": 280,
+        "width": 560,
+        "color": 7
+      },
+      "id": "37af5c4c-d21f-40f1-8a8c-23c60887b451",
+      "name": "Configuration",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        560,
+        176
+      ]
+    }
+  ],
+  "connections": {
+    "Receive User Prompt": {
+      "main": [
+        [
+          {
+            "node": "Normalize Input Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Input Fields": {
+      "main": [
+        [
+          {
+            "node": "Scan and Mask PCI Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scan and Mask PCI Data": {
+      "main": [
+        [
+          {
+            "node": "Forward to LLM API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Forward to LLM API": {
+      "main": [
+        [
+          {
+            "node": "Respond with LLM Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all"
+  },
+  "meta": {
+    "instanceId": ""
+  },
+  "tags": [
+    {
+      "name": "github"
+    },
+    {
+      "name": "PCI-DSS"
+    }
+  ]
+}
