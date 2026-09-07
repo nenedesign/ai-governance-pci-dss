@@ -21,6 +21,7 @@ PCI-DSS v4.0 Requirement 3 prohibits storing sensitive authentication data after
 |----------|------|-------------|--------|
 | [Cardholder Data Detector](workflow.json) | n8n workflow | Req 3, 4, 6.4 | Done |
 | [PCI Scope Boundary System Prompt](pci-scope-boundary-prompt.md) | System prompt | Req 3, 4, 6.4 | Done |
+| [Requirements Reference](reference/pci-dss-v4.0-requirements.md) | Reference | Req 3, 4, 6.4 | Done |
 
 ---
 
